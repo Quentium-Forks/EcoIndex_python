@@ -22,6 +22,10 @@ from ecoindex.models.scraper import RequestDetail
 from ecoindex.models.tasks import QueueTaskError, QueueTaskResult
 from ecoindex.monitoring import capture_task_failure, init_sentry
 from ecoindex.scraper.scrap import EcoindexScraper
+from ecoindex.screenshot_storage import (
+    get_screenshot_local_folder,
+    persist_screenshot,
+)
 from rq import get_current_job
 
 init_sentry(with_rq=True, release=get_api_version())
@@ -179,6 +183,13 @@ async def async_ecoindex_task(
                 ),
             )
 
+        capture_task_failure(
+            exc,
+            status_code=500,
+            url=url,
+            task_id=str(task_id),
+            task_name="ecoindex_task",
+        )
         return QueueTaskResult(
             status=TaskStatus.FAILURE,
             error=QueueTaskError(
