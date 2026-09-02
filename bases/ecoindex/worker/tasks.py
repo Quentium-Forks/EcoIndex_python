@@ -1,13 +1,13 @@
 from asyncio import run
-from os import getcwd
 from urllib.parse import urlparse
 from uuid import UUID
 
+from ecoindex.backend import get_api_version
 from ecoindex.backend.utils import check_quota, format_exception_response
 from ecoindex.config.settings import Settings
 from ecoindex.database.engine import get_session
 from ecoindex.database.exceptions.quota import QuotaExceededException
-from ecoindex.database.models import ApiEcoindex
+from ecoindex.database.models import ApiEcoindexBatchItem
 from ecoindex.database.repositories.worker import save_ecoindex_result_db
 from ecoindex.exceptions.scraper import EcoindexScraperStatusException
 from ecoindex.exceptions.worker import (
@@ -17,14 +17,14 @@ from ecoindex.exceptions.worker import (
     EcoindexTimeout,
 )
 from ecoindex.models import ScreenShot, WindowSize
-from ecoindex.models.enums import TaskStatus
+from ecoindex.models.enums import TaskStatus, Version
+from ecoindex.models.scraper import RequestDetail
 from ecoindex.models.tasks import QueueTaskError, QueueTaskResult
+from ecoindex.monitoring import capture_task_failure, init_sentry
 from ecoindex.scraper.scrap import EcoindexScraper
 from rq import get_current_job
-from sentry_sdk import init as sentry_init
 
-if Settings().GLITCHTIP_DSN:
-    sentry_init(Settings().GLITCHTIP_DSN)
+init_sentry(with_rq=True, release=get_api_version())
 
 
 def _get_task_id() -> UUID:
@@ -35,7 +35,11 @@ def _get_task_id() -> UUID:
 
 
 def ecoindex_task(
-    url: str, width: int, height: int, custom_headers: dict[str, str]
+    url: str,
+    width: int,
+    height: int,
+    custom_headers: dict[str, str],
+    include_requests_detail: bool = False,
 ) -> str:
     queue_task_result = run(
         async_ecoindex_task(
@@ -44,6 +48,7 @@ def ecoindex_task(
             width=width,
             height=height,
             custom_headers=custom_headers,
+            include_requests_detail=include_requests_detail,
         )
     )
 
@@ -56,32 +61,51 @@ async def async_ecoindex_task(
     width: int,
     height: int,
     custom_headers: dict[str, str],
+    include_requests_detail: bool = False,
 ) -> QueueTaskResult:
     try:
+        settings = Settings()
         session_generator = get_session()
         session = await session_generator.__anext__()
+        screenshot = (
+            ScreenShot(
+                id=str(task_id),
+                folder=get_screenshot_local_folder(version=Version.v1.value),
+            )
+            if settings.ENABLE_SCREENSHOT
+            else None
+        )
 
         await check_quota(session=session, host=urlparse(url=url).netloc)
 
-        ecoindex = await EcoindexScraper(
+        scraper = EcoindexScraper(
             url=url,
             window_size=WindowSize(height=height, width=width),
-            wait_after_scroll=Settings().WAIT_AFTER_SCROLL,
-            wait_before_scroll=Settings().WAIT_BEFORE_SCROLL,
-            screenshot=ScreenShot(
-                id=str(task_id), folder=f"{getcwd()}/screenshots/v1"
-            )
-            if Settings().ENABLE_SCREENSHOT
-            else None,
-            screenshot_gid=Settings().SCREENSHOTS_GID,
-            screenshot_uid=Settings().SCREENSHOTS_UID,
+            wait_after_scroll=settings.WAIT_AFTER_SCROLL,
+            wait_before_scroll=settings.WAIT_BEFORE_SCROLL,
+            screenshot=screenshot,
+            screenshot_gid=settings.SCREENSHOTS_GID,
+            screenshot_uid=settings.SCREENSHOTS_UID,
             custom_headers=custom_headers,
-        ).get_page_analysis()
+        )
+        ecoindex = await scraper.get_page_analysis()
+        request_details = (
+            [
+                RequestDetail.from_request_item(item)
+                for item in await scraper.get_all_requests()
+            ]
+            if include_requests_detail
+            else None
+        )
+
+        if screenshot:
+            persist_screenshot(screenshot=screenshot, version=Version.v1.value)
 
         db_result = await save_ecoindex_result_db(
             session=session,
             id=task_id,
             ecoindex_result=ecoindex,
+            requests=request_details,
         )
 
         return QueueTaskResult(status=TaskStatus.SUCCESS, detail=db_result)
@@ -170,7 +194,7 @@ async def async_ecoindex_task(
 def ecoindex_batch_import_task(results: list[dict], source: str) -> str:
     queue_task_result = run(
         async_ecoindex_batch_import_task(
-            results=[ApiEcoindex.model_validate(result) for result in results],
+            results=[ApiEcoindexBatchItem.model_validate(result) for result in results],
             source=source,
         )
     )
@@ -179,7 +203,7 @@ def ecoindex_batch_import_task(results: list[dict], source: str) -> str:
 
 
 async def async_ecoindex_batch_import_task(
-    results: list[ApiEcoindex], source: str
+    results: list[ApiEcoindexBatchItem], source: str
 ) -> QueueTaskResult:
     try:
         session_generator = get_session()
@@ -191,11 +215,17 @@ async def async_ecoindex_batch_import_task(
                 id=result.id,  # type: ignore
                 ecoindex_result=result,
                 source=source,
+                requests=result.request_details,
             )
 
         return QueueTaskResult(status=TaskStatus.SUCCESS)
 
     except Exception as exc:
+        capture_task_failure(
+            exc,
+            status_code=500,
+            task_name="ecoindex_batch_import_task",
+        )
         return QueueTaskResult(
             status=TaskStatus.FAILURE,
             error=QueueTaskError(

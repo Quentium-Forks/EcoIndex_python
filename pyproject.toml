@@ -7,6 +7,7 @@ requires-python = ">=3.10,<3.13"
 authors = [{ name = "Vincent Vatelot", email = "vincent.vatelot@ik.me" }]
 dependencies = [
     "aiofile>=3.8.8",
+    "boto3>=1.39.0",
     "cryptography>=48.0.1",
     "haralyzer>=2.4.0",
     "loguru>=0.7.2",
@@ -15,7 +16,7 @@ dependencies = [
     "python-slugify>=8.0.4",
     "redis[hiredis]>=5.0.1",
     "requests>=2.32.4",
-    "setuptools>=78.1.1",
+    "setuptools>=83.0.0",
     "tomli>=2.0.1",
 ]
 
@@ -24,7 +25,8 @@ update-values = "ecoindex.scripts:update_values"
 
 [dependency-groups]
 scraper = [
-    "camoufox>=0.4.11",
+    "playwright>=1.39.0",
+    "playwright-stealth>=1.0.6",
 ]
 scraper-webp = [
     "pillow>=12.2.0",
@@ -54,7 +56,7 @@ api-backend = [
 ]
 dev = [
     "black>=24.3.0",
-    "mypy>=1.7.0",
+    "ty>=0.0.1",
     "polylith-cli",
     "pytest>=7.4.2",
     "pytest-asyncio>=0.21.1",
@@ -80,18 +82,16 @@ members = ["projects/*"]
 [tool.pytest.ini_options]
 filterwarnings = ["ignore::DeprecationWarning"]
 
-[tool.mypy]
-mypy_path = ["bases", "components"]
-namespace_packages = true
-explicit_package_bases = true
-ignore_missing_imports = true
-disallow_untyped_defs = false
-exclude = [
-    "test",
-    "dist",
-    "__pycache__",
-    "projects/ecoindex_api/alembic/versions",
-]
+[tool.ty.environment]
+extra-paths = ["bases", "components"]
+python-version = "3.12"
+
+[tool.ty.src]
+exclude = ["test", "dist", "projects/ecoindex_api/alembic/versions"]
+
+[tool.ty.rules]
+unused-type-ignore-comment = "ignore"
+deprecated = "ignore"
 
 [tool.coverage.run]
 omit = ["test/*"]
@@ -107,6 +107,7 @@ extraPaths = ["bases", "components"]
 "bases/ecoindex/worker" = "ecoindex/worker"
 "bases/ecoindex/cli" = "ecoindex/cli"
 "components/ecoindex/scraper" = "ecoindex/scraper"
+"components/ecoindex/screenshot_storage" = "ecoindex/screenshot_storage"
 "components/ecoindex/models" = "ecoindex/models"
 "components/ecoindex/scripts" = "ecoindex/scripts"
 "components/ecoindex/exceptions" = "ecoindex/exceptions"
@@ -116,3 +117,4 @@ extraPaths = ["bases", "components"]
 "components/ecoindex/utils" = "ecoindex/utils"
 "components/ecoindex/database" = "ecoindex/database"
 "components/ecoindex/worker_component" = "ecoindex/worker_component"
+"components/ecoindex/monitoring" = "ecoindex/monitoring"

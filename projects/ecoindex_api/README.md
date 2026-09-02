@@ -28,18 +28,28 @@ The API specification can be found in the [documentation](projects/ecoindex_api/
 
 ## Installation
 
-With this docker setup you get 4 services running that are enough to make it all work:
+With this docker setup you get 5 services running that are enough to make it all work:
 
-- `db`: A MySQL instance
+- `db-mysql` or `db-postgres`: database instance (selected with `DB_ENGINE`)
 - `api`: The API instance running FastAPI application
 - `worker`: The RQ task worker that runs ecoindex analysis
-- `redis`: The [redis](https://redis.io/) instance that is used by the RQ worker and API cache
+- `valkey`: The [Valkey](https://valkey.io/) instance (Redis-compatible) used by the RQ worker and API cache
+- `rustfs`: A local [RustFS](https://rustfs.com/) object storage exposing an S3-compatible API for screenshots
 
 ### First start
 
 ```bash
 cp docker-compose.yml.template docker-compose.yml && \
-docker  compose up -d
+cp .env.template .env && \
+task api:docker-up-mysql -- -d
+```
+
+For PostgreSQL instead:
+
+```bash
+cp docker-compose.yml.template docker-compose.yml && \
+cp .env.template .env && \
+task api:docker-up-postgres -- -d
 ```
 
 Every services should start normaly, then you can go to:
@@ -61,17 +71,62 @@ Here are the environment variables you can configure in your `.env` file:
 | API                 | `CORS_ALLOWED_ORIGINS`     | `*`                                | See [MDN web doc](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin)                                                                                                                                                                                                                                                                                                                   |
 | API                 | `EXCLUDED_HOSTS`           | `["localhost", "127.0.0.1"]`       | You can configure a list of hosts that will be excluded from the analysis.                                                                                                                                                                                                                                                                                                                                                 |
 | API, Worker         | `DAILY_LIMIT_PER_HOST`     | 0                                  | When this variable is set, it won't be possible for a same host to make more request than defined in the same day to avoid overload. If the variable is set, you will get a header `x-remaining-daily-requests: 6` in your response. It is used for the POST methods. If you reach your authorized request quota for the day, the next requests will give you a 429 response. If the variable is set to 0, no limit is set |
-| API, Worker         | `DATABASE_URL`             | `sqlite+aiosqlite:///./sql_app.db` | If you run your mysql instance on a dedicated server, you can configure it with your credentials. By default, it uses an sqlite database when running in local                                                                                                                                                                                                                                                             |  |
-| API, Worker         | `GLITCHTIP_DSN`            | ``                                 | If you want to use [Glitchtip](https://glitchtip.com/) to monitor your application, you can set this variable with your DSN.                                                                                                                                                                                                                                                                                               |
-| API, Worker         | `REDIS_CACHE_HOST`         | `localhost`                        | The hostname of the redis backend used by RQ and API cache                                                                                                                                                                                                                                                                                                                                                                 |
-| API, Worker         | `RQ_FAILURE_TTL`           | `86400`                            | Time in seconds before failed job metadata is removed from Redis                                                                                                                                                                                                                                                                                                                                                           |
+| API, Worker         | `DB_ENGINE`                | `sqlite`                           | Database backend: `sqlite`, `mysql` or `postgres`. Used to build `DATABASE_URL` when it is not set explicitly.                                                                                                                                                                                                                                              |
+| API, Worker         | `DB_HOST`                  | `localhost`                        | Database host. Use `db-mysql` or `db-postgres` in Docker Compose.                                                                                                                                                                                                                                                                                          |
+| API, Worker         | `DB_PORT`                  | `3306` / `5432`                    | Database port. Defaults to the standard port of the selected engine when omitted.                                                                                                                                                                                                                                                                           |
+| API, Worker         | `DB_USER`                  | `ecoindex`                         | Database user.                                                                                                                                                                                                                                                                                                                                              |
+| API, Worker         | `DB_PASSWORD`              | `ecoindex`                         | Database password.                                                                                                                                                                                                                                                                                                                                          |
+| API, Worker         | `DB_NAME`                  | `ecoindex`                         | Database name.                                                                                                                                                                                                                                                                                                                                              |
+| API, Worker         | `DATABASE_URL`             | built from `DB_ENGINE`             | Optional explicit SQLAlchemy URL. When set, it overrides `DB_ENGINE` and related variables. Examples: `sqlite+aiosqlite:///db.sqlite3`, `mysql+aiomysql://user:pass@host/db?charset=utf8mb4`, `postgresql+asyncpg://user:pass@host:5432/db`                                                                                                                |
+| API, Worker         | `SENTRY_DSN`               | ``                                 | If you want to use [Sentry](https://sentry.io/) to monitor your application, set this variable with your project DSN.                                                                                                                                                                                                                                                                                                      |
+| API, Worker         | `SENTRY_ENVIRONMENT`       | ``                                 | Optional Sentry environment name (e.g. `production`, `staging`). If not set, defaults to `development` when `DEBUG=True`, otherwise `production`.                                                                                                                                                                                                                                                                    |
+| API, Worker         | `SENTRY_TRACES_SAMPLE_RATE`| `0.0`                              | Fraction of transactions to send to Sentry for performance monitoring (0.0 to 1.0). Set to `0.1` in production to sample 10% of requests.                                                                                                                                                                                                                                                                                 |
+| API, Worker         | `REDIS_CACHE_HOST`         | `localhost`                        | The hostname of the Valkey backend used by RQ and API cache (Redis-compatible protocol)                                                                                                                                                                                                                                                                                                                                      |
+| API, Worker         | `RQ_FAILURE_TTL`           | `86400`                            | Time in seconds before failed job metadata is removed from Valkey                                                                                                                                                                                                                                                                                                                                                          |
 | API, Worker         | `RQ_JOB_TIMEOUT`           | `600`                              | Maximum time in seconds a job is allowed to run before being stopped                                                                                                                                                                                                                                                                                                                                                       |
-| API, Worker         | `RQ_RESULT_TTL`            | `86400`                            | Time in seconds before successful job results are removed from Redis                                                                                                                                                                                                                                                                                                                                                       |
+| API, Worker         | `RQ_RESULT_TTL`            | `86400`                            | Time in seconds before successful job results are removed from Valkey                                                                                                                                                                                                                                                                                                                                                      |
 | Worker              | `RQ_WORKERS`               | `3`                                | Number of RQ worker processes started in parallel (one job per process)                                                                                                                                                                                                                                                                                                                                                    |
 | API, Worker         | `TZ`                       | `Europe/Paris`                     | The timezone used by the API and the worker.                                                                                                                                                                                                                                                                                                                                                                               |
-| Worker              | `ENABLE_SCREENSHOT`        | `False`                            | If screenshots are enabled, when analyzing the page the image will be generated in the `./screenshot` directory with the image name corresponding to the analysis ID and will be available on the path `/{version}/ecoindexes/{id}/screenshot`                                                                                                                                                                             |
-| Worker              | `SCREENSHOT_GID`           | None                               | The group used to create the screenshot. If not set, the group of the current user will be used.                                                                                                                                                                                                                                                                                                                           |
-| Worker              | `SCREENSHOT_UID`           | None                               | The user used to create the screenshot. If not set, the current user will be used.                                                                                                                                                                                                                                                                                                                                         |
+| API, Worker         | `ENABLE_SCREENSHOT`        | `False`                            | If screenshots are enabled, the analysis generates a `.webp` image that remains available on `/{version}/ecoindexes/{id}/screenshot`. The underlying storage backend depends on `SCREENSHOT_STORAGE_TYPE`.                                                                                                                                                                                                                |
+| API, Worker         | `SCREENSHOT_STORAGE_TYPE`  | `filesystem`                       | Screenshot storage backend. Supported values are `filesystem` and `s3`. The provided Docker Compose configuration forces `s3` by default.                                                                                                                                                                                                                                                                                 |
+| API, Worker         | `SCREENSHOT_FILESYSTEM_PATH` | `./screenshots`                  | Root folder used when `SCREENSHOT_STORAGE_TYPE=filesystem`. The API reads screenshots from this path and the worker writes them there.                                                                                                                                                                                                                                                                                     |
+| API, Worker         | `SCREENSHOT_S3_ENDPOINT_URL` | ``                               | S3-compatible endpoint used when `SCREENSHOT_STORAGE_TYPE=s3` (for example `http://rustfs:9000` in the provided Docker Compose stack).                                                                                                                                                                                                                                                                                    |
+| API, Worker         | `SCREENSHOT_S3_REGION`     | `us-east-1`                        | Region sent by the S3 client. This must match the S3 region configured by your object storage server.                                                                                                                                                                                                                                                                                                                       |
+| API, Worker         | `SCREENSHOT_S3_BUCKET`     | ``                                 | Bucket that stores screenshots when `SCREENSHOT_STORAGE_TYPE=s3`.                                                                                                                                                                                                                                                                                                                                                            |
+| API, Worker         | `SCREENSHOT_S3_PREFIX`     | `screenshots`                      | Optional object key prefix used inside the screenshot bucket.                                                                                                                                                                                                                                                                                                                                                                 |
+| API, Worker         | `SCREENSHOT_S3_ACCESS_KEY_ID` | ``                              | Access key used to write and read screenshots from the S3-compatible storage.                                                                                                                                                                                                                                                                                                                                                |
+| API, Worker         | `SCREENSHOT_S3_SECRET_ACCESS_KEY` | ``                           | Secret key associated with `SCREENSHOT_S3_ACCESS_KEY_ID`.                                                                                                                                                                                                                                                                                                                                                                     |
+| API, Worker         | `SCREENSHOT_S3_FORCE_PATH_STYLE` | `True`                        | Forces path-style S3 URLs. This should stay enabled for RustFS and many local S3-compatible services.                                                                                                                                                                                                                                                                                                                        |
+| Worker              | `SCREENSHOTS_GID`          | None                               | The group used to create the screenshot file before it is persisted. This is mainly useful with `filesystem` storage.                                                                                                                                                                                                                                                                                                       |
+| Worker              | `SCREENSHOTS_UID`          | None                               | The user used to create the screenshot file before it is persisted. This is mainly useful with `filesystem` storage.                                                                                                                                                                                                                                                                                                        |
+
+### Screenshot storage
+
+Two screenshot storage strategies are available:
+
+- `filesystem`: the worker writes screenshots to `SCREENSHOT_FILESYSTEM_PATH` and the API serves the same shared directory.
+- `s3`: the worker creates the screenshot locally, uploads it to the configured S3-compatible bucket, then the API reads it back from object storage.
+
+The Docker Compose stack is configured to use `s3` by default with a local RustFS container. This makes the default setup closer to production-style object storage while still staying self-hosted.
+
+If you want to go back to local disk storage, set:
+
+```bash
+SCREENSHOT_STORAGE_TYPE=filesystem
+SCREENSHOT_FILESYSTEM_PATH=/code/screenshots
+```
+
+When using the bundled RustFS service, screenshots are uploaded to:
+
+- endpoint: `http://rustfs:9000`
+- bucket: `ecoindex-screenshots`
+- region: `us-east-1`
+
+The RustFS container starts with credentials and bucket initialization from the Docker Compose environment variables. For any environment exposed outside local development, change:
+
+- `SCREENSHOT_S3_ACCESS_KEY_ID`
+- `SCREENSHOT_S3_SECRET_ACCESS_KEY`
+- `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` in the RustFS service
 
 ## Local development with [task](https://taskfile.dev)
 
@@ -81,10 +136,35 @@ Task is a task runner and build tool. You can install it with the following comm
 curl -sL https://taskfile.dev/install.sh | sh
 ```
 
-Then you can run the server in debug mode with the following command:
+### Setup
+
+From the repository root:
 
 ```bash
-task start-dev
+task uv:install          # Install Python 3.12 and all dependencies
+task api:init-dev-project # Initialize API dev environment (Playwright, .env, migrations)
+```
+
+### Run the API locally
+
+Valkey and RustFS are started automatically via Docker. Set `DB_ENGINE` in `.env` to choose the database:
+
+- `sqlite` (default): no database container, file stored locally
+- `mysql`: starts a local MySQL container on port 3306
+- `postgres`: starts a local PostgreSQL container on port 5432
+
+Then run:
+
+```bash
+task api:start-dev
+```
+
+This starts the backend (http://localhost:8000), the RQ worker and the RQ dashboard (http://localhost:9181).
+
+To stop everything, including the local Valkey and RustFS containers:
+
+```bash
+task api:stop-dev
 ```
 
 ## Testing

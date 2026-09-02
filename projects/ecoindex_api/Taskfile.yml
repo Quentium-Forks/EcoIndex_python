@@ -121,10 +121,24 @@ tasks:
     silent: true
 
   docker-up:
-    desc: Start the docker-compose API
+    desc: Start the docker-compose API (uses DB_ENGINE from .env, default mysql)
     deps: [init-env, init-docker-compose]
     cmds:
-      - docker compose up {{.CLI_ARGS}}
+      - bash scripts/docker_compose_up.sh {{.CLI_ARGS}}
+    silent: true
+
+  docker-up-mysql:
+    desc: Start the docker-compose API with MySQL
+    deps: [init-env, init-docker-compose]
+    cmds:
+      - DB_ENGINE=mysql DB_HOST=db-mysql DB_PORT=3306 bash scripts/docker_compose_up.sh {{.CLI_ARGS}}
+    silent: true
+
+  docker-up-postgres:
+    desc: Start the docker-compose API with PostgreSQL
+    deps: [init-env, init-docker-compose]
+    cmds:
+      - DB_ENGINE=postgres DB_HOST=db-postgres DB_PORT=5432 bash scripts/docker_compose_up.sh {{.CLI_ARGS}}
     silent: true
 
   docker-down:
@@ -132,7 +146,7 @@ tasks:
     preconditions:
       - test -f docker-compose.yml
     cmds:
-      - docker compose down {{.CLI_ARGS}}
+      - docker compose --profile mysql --profile postgres down {{.CLI_ARGS}}
     silent: true
 
   docker-exec:
@@ -156,34 +170,32 @@ tasks:
     desc: Create a new alembic migration
     cmds:
       - uv run --package ecoindex_api alembic revision --autogenerate -m "{{.CLI_ARGS}}"
-    dir: ../..
     silent: true
 
   migration-upgrade:
     desc: Upgrade the database to the last migration
+    deps: [start-dev-infra]
     cmds:
       - uv run --package ecoindex_api alembic upgrade head
-    dir: ../..
     silent: true
 
-  start-redis:
+  start-dev-infra:
     internal: true
     cmds:
-      - |
-        if ! uv run python scripts/wait_redis.py > /dev/null 2>&1; then
-          docker rm -f ecoindex-dev-redis 2>/dev/null || true
-          docker run -p 6379:6379 -d --name ecoindex-dev-redis redis:alpine 2>/dev/null || docker start ecoindex-dev-redis 2>/dev/null || true
-        fi
-      - uv run python scripts/wait_redis.py > /dev/null
-    status:
-      - uv run python scripts/wait_redis.py > /dev/null
+      - bash scripts/start_dev_infra.sh
     silent: true
 
   start-worker:
-    deps: [start-redis]
+    deps: [start-dev-infra]
     cmds:
       - |
-        REDIS_DEV_HOST="$(uv run python projects/ecoindex_api/scripts/wait_redis.py)"
+        if [ -f projects/ecoindex_api/.env ]; then
+          set -a
+          # shellcheck disable=SC1091
+          . projects/ecoindex_api/.env
+          set +a
+        fi
+        REDIS_DEV_HOST="$(uv run python projects/ecoindex_api/scripts/wait_valkey.py)"
         export REDIS_CACHE_HOST="$REDIS_DEV_HOST"
         export PYTHONPATH="bases:components"
         export RQ_WORKERS="{{.RQ_WORKERS}}"
@@ -194,10 +206,16 @@ tasks:
     silent: true
 
   start-backend:
-    deps: [start-redis]
+    deps: [start-dev-infra]
     cmds:
       - |
-        export REDIS_CACHE_HOST="$(uv run python projects/ecoindex_api/scripts/wait_redis.py)"
+        if [ -f projects/ecoindex_api/.env ]; then
+          set -a
+          # shellcheck disable=SC1091
+          . projects/ecoindex_api/.env
+          set +a
+        fi
+        export REDIS_CACHE_HOST="$(uv run python projects/ecoindex_api/scripts/wait_valkey.py)"
         export PYTHONPATH="bases:components"
         uv run --package ecoindex_api --group backend uvicorn ecoindex.backend.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir bases --reload-dir components
     dir: ../..
@@ -205,10 +223,10 @@ tasks:
 
   start-rq-dashboard:
     desc: Start the RQ dashboard for monitoring queues
-    deps: [start-redis]
+    deps: [start-dev-infra]
     cmds:
       - |
-        REDIS_DEV_HOST="$(uv run python projects/ecoindex_api/scripts/wait_redis.py)"
+        REDIS_DEV_HOST="$(uv run python projects/ecoindex_api/scripts/wait_valkey.py)"
         uv run --package ecoindex_api --group dev rq-dashboard \
           --bind 0.0.0.0 \
           --port {{.RQ_DASHBOARD_PORT}} \
@@ -218,9 +236,36 @@ tasks:
 
   start-dev:
     deps: [start-backend, start-worker, start-rq-dashboard]
-    desc: Start the backend, the worker and the RQ dashboard
+    desc: Start the backend, the worker and the RQ dashboard (set DB_ENGINE in .env)
     cmds:
       - echo "Starting the backend, worker and RQ dashboard (http://localhost:{{.RQ_DASHBOARD_PORT}})"
+    silent: true
+
+  stop-dev:
+    desc: Stop the backend, workers, RQ dashboard and dev Docker containers
+    cmds:
+      - |
+        set -u
+        echo "Stopping local dev processes..."
+
+        stop_port() {
+          port="$1"
+          if command -v lsof >/dev/null 2>&1; then
+            lsof -ti :"$port" 2>/dev/null | xargs -r kill 2>/dev/null || true
+          elif command -v fuser >/dev/null 2>&1; then
+            fuser -k "$port"/tcp 2>/dev/null || true
+          fi
+        }
+
+        stop_port 8000
+        stop_port {{.RQ_DASHBOARD_PORT}}
+        pkill -f "watchmedo auto-restart.*start_rq_workers.sh" 2>/dev/null || true
+        pkill -f "rq worker ecoindex" 2>/dev/null || true
+        pkill -f "uvicorn ecoindex.backend.main:app" 2>/dev/null || true
+
+        echo "Stopping Docker containers..."
+        docker rm -f ecoindex-dev-valkey ecoindex-dev-rustfs ecoindex-dev-mysql ecoindex-dev-postgres 2>/dev/null || true
+        echo "Local development environment stopped."
     silent: true
 
   init-env:

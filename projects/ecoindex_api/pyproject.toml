@@ -1,6 +1,6 @@
 [project]
 name = "ecoindex_api"
-version = "3.13.0"
+version = "3.16.1"
 description = "REST API to expose Ecoindex"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -9,6 +9,7 @@ authors = [{ name = "Vincent Vatelot", email = "vincent.vatelot@ik.me" }]
 dependencies = [
     "aiofile>=3.8.8",
     "alembic>=1.12.1",
+    "boto3>=1.39.0",
     "rq>=2.1.0",
     "cryptography>=48.0.1",
     "fastapi>=0.109.1",
@@ -19,7 +20,7 @@ dependencies = [
     "redis>=5.0.1",
     "requests>=2.32.4",
     "sentry-sdk>=2.8.0",
-    "setuptools>=78.1.1",
+    "setuptools>=83.0.0",
     "sqlmodel>=0.0.14",
     "ua-generator>=2.0.5",
 ]
@@ -43,7 +44,9 @@ worker = [
     "camoufox>=0.4.11",
 ]
 dev = [
+    "aiomysql>=0.2.0",
     "aiosqlite>=0.19.0",
+    "asyncpg>=0.29.0",
     "rq-dashboard",
     "typing-extensions>=4.8.0",
     "watchdog>=6.0.0",
@@ -67,6 +70,8 @@ packages = ["ecoindex"]
 "../../components/ecoindex/database" = "ecoindex/database"
 "../../components/ecoindex/exceptions" = "ecoindex/exceptions"
 "../../components/ecoindex/models" = "ecoindex/models"
+"../../components/ecoindex/monitoring" = "ecoindex/monitoring"
 "../../components/ecoindex/scraper" = "ecoindex/scraper"
+"../../components/ecoindex/screenshot_storage" = "ecoindex/screenshot_storage"
 "../../components/ecoindex/utils" = "ecoindex/utils"
 "../../components/ecoindex/worker_component" = "ecoindex/worker_component"

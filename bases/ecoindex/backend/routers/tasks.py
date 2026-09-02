@@ -1,14 +1,14 @@
 from typing import Annotated
-from urllib.parse import urlparse, urlunparse
 
-import idna
 import requests
+from pydantic import TypeAdapter
+from pydantic.networks import AnyHttpUrl
 from ecoindex.backend.dependencies.validation import validate_api_key_batch
 from ecoindex.backend.models.dependencies_parameters.id import IdParameter
 from ecoindex.backend.utils import check_quota
 from ecoindex.config.settings import Settings
 from ecoindex.database.engine import get_session
-from ecoindex.database.models import ApiEcoindexes
+from ecoindex.database.models import ApiEcoindexBatchItems
 from ecoindex.models import WebPage
 from ecoindex.models.enums import TaskStatus
 from ecoindex.models.response_examples import (
@@ -42,42 +42,8 @@ def convert_url_to_punycode(url: str) -> str:
     """
     Convert an URL with emoji domain (or any Unicode domain) to Punycode.
     This makes the URL compatible with requests library.
-
-    Args:
-        url: The URL string that may contain Unicode characters in the domain
-
-    Returns:
-        The URL with the domain converted to Punycode
     """
-    parsed = urlparse(url)
-
-    # Extract the hostname (netloc may contain port, so we need to handle that)
-    hostname = parsed.hostname
-    if not hostname:
-        return url
-
-    try:
-        # Convert the hostname to Punycode
-        hostname_punycode = idna.encode(hostname).decode("ascii")
-
-        # Reconstruct the netloc with the converted hostname
-        if parsed.port:
-            netloc = f"{hostname_punycode}:{parsed.port}"
-        else:
-            netloc = hostname_punycode
-
-        # Reconstruct the URL with the converted hostname
-        return urlunparse((
-            parsed.scheme,
-            netloc,
-            parsed.path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
-        ))
-    except (idna.IDNAError, UnicodeError):
-        # If conversion fails, return the original URL
-        return url
+    return str(TypeAdapter(AnyHttpUrl).validate_python(url))
 
 
 def _enqueue_settings(*, with_retry: bool = True) -> dict[str, object]:
@@ -123,6 +89,15 @@ async def add_ecoindex_analysis_task(
             example={"X-My-Custom-Header": "MyValue"},
         ),
     ] = {},
+    include_requests_detail: Annotated[
+        bool,
+        Body(
+            description=(
+                "If true, store the detailed list of requests made by the page"
+            ),
+            example=False,
+        ),
+    ] = False,
     session: AsyncSession = Depends(get_session),
 ) -> str:
     if Settings().DAILY_LIMIT_PER_HOST:
@@ -157,19 +132,25 @@ async def add_ecoindex_analysis_task(
         )
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
+        error_detail = (
+            str(e.response.status_code)
+            if e.response is not None
+            else str(e)
+        )
         raise HTTPException(
             status_code=e.response.status_code
-            if e.response
+            if e.response is not None
             else status.HTTP_400_BAD_REQUEST,
-            detail=f"The URL {web_page.url} is unreachable. Are you really sure of this url? 🤔 ({e.response.status_code if e.response else ''})",
+            detail=f"The URL {web_page.url} is unreachable. Are you really sure of this url? 🤔 ({error_detail})",
         )
 
     job = ecoindex_queue.enqueue(
         ecoindex_task,
-        url=str(web_page.url),
+        url=url_for_request,
         width=web_page.width,
         height=web_page.height,
         custom_headers=headers,
+        include_requests_detail=include_requests_detail,
         **_enqueue_settings(),
     )
 
@@ -256,7 +237,7 @@ async def delete_ecoindex_analysis_task_by_id(
 )
 async def add_ecoindex_analysis_task_batch(
     results: Annotated[
-        ApiEcoindexes,
+        ApiEcoindexBatchItems,
         Body(
             default=...,
             title="List of ecoindex analysis results to save",
