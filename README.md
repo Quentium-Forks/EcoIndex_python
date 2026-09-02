@@ -70,7 +70,7 @@ For API development, also run:
 task api:init-dev-project
 ```
 
-This installs dependencies, Playwright, creates the `.env` file and runs database migrations.
+This installs dependencies, Camoufox, creates the `.env` file and runs database migrations.
 
 ### Usage
 
